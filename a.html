@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Test</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        canvas {
+            border: 1px solid black;
+        }
+
+        .hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Game Test</h1>
+    <canvas id="gameCanvas" width="500" height="500"></canvas>
+    <div class="hud">
+        <p id="health">Health: 100</p>
+        <p id="score">Score: 0</p>
+    </div>
+    <script>
+        // Change your socket address
+        const socket = io('http://XXX.XXX.XXX.XXX:3000');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const TILE_SIZE = 10;
+        const VIEW_SIZE = 50;
+
+        let mapSize = 0;
+        let map = [];
+        let beams = [];
+        let players = {};
+        let playerId = null;
+
+        socket.on('map', (data) => {
+            mapSize = data.size;
+            map = data.map;
+        });
+
+        function drawMap(centerX, centerY) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const startX = Math.max(0, centerX - Math.floor(VIEW_SIZE / 2));
+            const startY = Math.max(0, centerY - Math.floor(VIEW_SIZE / 2));
+            const endX = Math.min(mapSize, centerX + Math.floor(VIEW_SIZE / 2));
+            const endY = Math.min(mapSize, centerY + Math.floor(VIEW_SIZE / 2));
+
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    const isObstacle = map[y][x] === 1;
+                    ctx.fillStyle = isObstacle ? 'black' : 'white'; // Bạn có thể thêm điều kiện vật cản ở đây
+                    ctx.fillRect((x - startX) * TILE_SIZE, (y - startY) * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
+        function drawPlayers(centerX, centerY) {
+            for (let id in players) {
+                const player = players[id];
+                const screenX = (player.x - centerX + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+                const screenY = (player.y - centerY + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+
+                ctx.fillStyle = id === playerId ? 'blue' : 'red';
+                ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
+
+                // Vẽ thanh máu
+                ctx.fillStyle = 'green';
+                const healthBarWidth = (player.hp / 100) * TILE_SIZE;
+                ctx.fillRect(screenX, screenY - 5, healthBarWidth, 2);
+            }
+        }
+
+        function drawBeams(centerX, centerY) {
+            beams.forEach((beam) => {
+                const startX = (beam.startX - centerX + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+                const startY = (beam.startY - centerY + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+                const endX = (beam.endX - centerX + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+                const endY = (beam.endY - centerY + Math.floor(VIEW_SIZE / 2)) * TILE_SIZE;
+
+                ctx.strokeStyle = 'yellow';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+            });
+        }
+
+        function draw() {
+            const player = players[playerId];
+            if (player) {
+                drawMap(player.x, player.y);
+                drawPlayers(player.x, player.y);
+                drawBeams(player.x, player.y);
+            }
+        }
+
+
+        socket.on('currentPlayers', (serverPlayers) => {
+            players = serverPlayers;
+            playerId = socket.id;
+            draw();
+        });
+
+        socket.on('newPlayer', (player) => {
+            players[player.id] = player.position;
+            draw();
+        });
+
+        socket.on('updatePosition', (data) => {
+            players[data.id] = data.position;
+            draw();
+        });
+
+        socket.on('updateHealth', (data) => {
+            players[data.id].hp = data.hp;
+            if (data.id === playerId) {
+                document.getElementById('health').innerText = `Health: ${data.hp <= 0 ? 100 : data.hp}`;
+            }
+            draw();
+        });
+
+        socket.on('newBeam', (beam) => {
+            beams.push(beam);
+            setTimeout(() => {
+                beams = beams.filter((b) => b !== beam);
+                draw();
+            }, 100); // Tia tồn tại trong 100ms
+            draw();
+        });
+
+        socket.on('playerRespawned', (data) => {
+            players[data.id] = {
+                ...data.position,
+                hp: 100 // Đặt lại máu khi respawn
+            };
+
+            draw();
+        });
+
+
+        socket.on('playerDisconnected', (id) => {
+            delete players[id];
+            draw();
+        });
+
+        const dir = {
+            dx: -1,
+            dy: 0
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowUp') {
+
+                dir.dx = 0;
+                dir.dy = -1;
+                socket.emit('move', dir);
+
+            };
+            if (event.key === 'ArrowDown') {
+                dir.dx = 0;
+                dir.dy = 1;
+                socket.emit('move', dir);
+            }
+            if (event.key === 'ArrowLeft') {
+                dir.dx = -1;
+                dir.dy = 0;
+                socket.emit('move', dir);
+            }
+            if (event.key === 'ArrowRight') {
+                dir.dx = 1;
+                dir.dy = 0;
+                socket.emit('move', dir);
+            }
+            if (event.key === ' ') {
+                socket.emit('shoot', dir);
+            }
+        });
+    </script>
+</body>
+
+</html>
